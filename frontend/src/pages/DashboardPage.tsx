@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import type { Task, UserProfile, Priority, TaskStatus } from "../types";
+import type { Task, UserProfile, StaffUser } from "../types";
 import { api } from "../api/api";
 import { useAuth } from "../auth/AuthProvider";
 import KanbanBoard from "../components/KanbanBoard";
@@ -7,6 +7,10 @@ import TaskModal from "../components/TaskModal";
 import TaskDetailModal from "../components/TaskDetailModal";
 import NotificationsPanel from "../components/NotificationsPanel";
 import AdminStatsPanel from "../components/AdminStatsPanel";
+import { filterTasks, isTaskOverdue } from "../utils/taskUtils";
+import { IconCalendar, IconClock, IconCheckCircle, IconAlertCircle } from "../components/ui/StatIcons";
+
+type ViewMode = "board" | "my";
 
 export default function DashboardPage({ profile }: { profile: UserProfile }) {
   const { getFreshToken } = useAuth();
@@ -17,50 +21,50 @@ export default function DashboardPage({ profile }: { profile: UserProfile }) {
 
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
+  const [users, setUsers] = useState<StaffUser[]>([]);
+  const [viewMode, setViewMode] = useState<ViewMode>("board");
+  const [createdFrom, setCreatedFrom] = useState("");
+  const [createdTo, setCreatedTo] = useState("");
 
-  const [users, setUsers] = useState<Array<{ uid: string; name: string; department: string }> | null>(null);
   const isAdmin = profile.role === "Admin";
 
-  function isTokenSkewError(err: any) {
-    const msg = String(err?.message || err || "");
-    return msg.toLowerCase().includes("token used too early");
-  }
+  const assignedTasks = useMemo(
+    () => filterTasks(tasks, "assigned", profile.uid),
+    [tasks, profile.uid]
+  );
+  const createdTasks = useMemo(
+    () => filterTasks(tasks, "created", profile.uid),
+    [tasks, profile.uid]
+  );
+  const myTasks = assignedTasks;
+  const overdueCount = useMemo(() => tasks.filter((t) => isTaskOverdue(t)).length, [tasks]);
 
   const teacherSummary = useMemo(() => {
-    const today = new Date();
-    const todayKey = today.toISOString().slice(0, 10); // UTC date key
-
+    const todayKey = new Date().toISOString().slice(0, 10);
     let dueToday = 0;
     let pending = 0;
     let completed = 0;
-
     for (const t of tasks) {
-      const status = String(t.status || "To Do");
+      const status = String(t.status || "Open");
       if (status === "Completed") completed += 1;
       else pending += 1;
-
-      if (t.due_date && t.due_date.slice(0, 10) === todayKey) {
-        dueToday += 1;
-      }
+      if (t.due_date && t.due_date.slice(0, 10) === todayKey) dueToday += 1;
     }
-
-    return { dueToday, pending, completed };
-  }, [tasks]);
+    return { dueToday, pending, completed, overdue: overdueCount };
+  }, [tasks, overdueCount]);
 
   const refreshTasks = async () => {
     setLoading(true);
     setError(null);
     try {
       const token = await getFreshToken();
-      const res = await api.listTasks(token);
+      const res = await api.listTasks(token, {
+        created_from: isAdmin && createdFrom ? createdFrom : undefined,
+        created_to: isAdmin && createdTo ? createdTo : undefined,
+      });
       setTasks(res.tasks || []);
     } catch (e: any) {
-      if (isTokenSkewError(e)) {
-        // Suppress spammy token skew errors from the UI.
-        setError(null);
-      } else {
-        setError(e?.message || "Failed to load tasks");
-      }
+      setError(e?.message || "Failed to load tasks");
     } finally {
       setLoading(false);
     }
@@ -69,7 +73,7 @@ export default function DashboardPage({ profile }: { profile: UserProfile }) {
   useEffect(() => {
     refreshTasks();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [createdFrom, createdTo]);
 
   useEffect(() => {
     tasksRef.current = tasks;
@@ -77,107 +81,167 @@ export default function DashboardPage({ profile }: { profile: UserProfile }) {
 
   useEffect(() => {
     async function loadUsers() {
-      if (!isAdmin) return;
-      const token = await getFreshToken();
-      const res = await api.listUsers(token);
-      setUsers((res.users || []).map((u) => ({ uid: u.uid, name: u.name, department: u.department })));
+      try {
+        const token = await getFreshToken();
+        const res = await api.listUsers(token);
+        setUsers(res.users || []);
+      } catch {
+        setUsers([]);
+      }
     }
-    if (isAdmin) loadUsers().catch(() => {});
+    loadUsers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdmin]);
+  }, []);
 
   async function moveTask(taskId: string, newStatus: string) {
-    // Optimistic UI: update immediately, then persist to backend.
     let beforeSnapshot: Task[] | null = null;
     setTasks((prev) => {
       beforeSnapshot = prev;
       const moved = prev.find((t) => t.id === taskId);
       if (!moved) return prev;
-
       const rest = prev.filter((t) => t.id !== taskId);
       return [{ ...moved, status: newStatus }, ...rest];
     });
 
-    // Persist in background; retry on token skew so the UI doesn't require manual refresh.
-    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-    const maxRetries = 2;
-
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      try {
-        const token = await getFreshToken();
-        await api.updateTask(token, taskId, { status: newStatus });
-        return;
-      } catch (e: any) {
-        if (isTokenSkewError(e)) {
-          setError(null);
-          if (attempt < maxRetries) {
-            await sleep(1200 * (attempt + 1));
-            continue;
-          }
-          return;
-        }
-
-        setError(e?.message || "Failed to update task");
-        if (beforeSnapshot) setTasks(beforeSnapshot);
-        return;
-      }
+    try {
+      const token = await getFreshToken();
+      await api.updateTask(token, taskId, { status: newStatus });
+    } catch (e: any) {
+      setError(e?.message || "Failed to update task");
+      if (beforeSnapshot) setTasks(beforeSnapshot);
     }
   }
 
+  const boardTasks = viewMode === "my" && !isAdmin ? myTasks : tasks;
+
+  const sidebarSummary = useMemo(() => {
+    const total = tasks.length;
+    const completed = tasks.filter((t) => String(t.status) === "Completed").length;
+    const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0;
+    return {
+      total,
+      activeToday: teacherSummary.dueToday,
+      completionRate,
+    };
+  }, [tasks, teacherSummary.dueToday]);
+
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
         <div>
-          <div className="sectionTitle" style={{ marginTop: 0 }}>
-            Tasks Kanban
-          </div>
-          <div className="muted" style={{ fontSize: 13 }}>
-            Drag and drop tasks between columns. Double-click a card to open details.
-          </div>
+          <h1 className="pageHeading">{isAdmin ? "All Tasks" : viewMode === "my" ? "My Tasks" : "Tasks"}</h1>
+          <p className="pageSub">
+            Drag tasks between columns. Double-click a card for details.
+            {!isAdmin && overdueCount > 0 ? ` · ${overdueCount} overdue` : null}
+          </p>
         </div>
-        <button className="btn btnPrimary" onClick={() => setTaskModalOpen(true)}>
-          + Create
-        </button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {!isAdmin ? (
+            <>
+              <button
+                type="button"
+                className={"btn" + (viewMode === "board" ? " btnTabActive" : "")}
+                onClick={() => setViewMode("board")}
+              >
+                All Related
+              </button>
+              <button
+                type="button"
+                className={"btn" + (viewMode === "my" ? " btnTabActive" : "")}
+                onClick={() => setViewMode("my")}
+              >
+                My Tasks
+              </button>
+            </>
+          ) : null}
+          <button type="button" className="btnCreate" onClick={() => setTaskModalOpen(true)}>
+            + Create
+          </button>
+        </div>
       </div>
 
-      {!isAdmin ? (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 12 }}>
-          <div style={{ border: "1px solid #e2e8f0", borderRadius: 14, padding: 12, background: "rgba(59,130,246,0.06)" }}>
-            <div className="muted" style={{ fontWeight: 900, fontSize: 12 }}>
-              Due Today
-            </div>
-            <div style={{ fontWeight: 1000, fontSize: 22 }}>{teacherSummary.dueToday}</div>
+      <div className="statsGrid">
+        <div className="statCard">
+          <div className="statIconBox statIconIndigo">
+            <IconCalendar />
           </div>
-          <div style={{ border: "1px solid #e2e8f0", borderRadius: 14, padding: 12, background: "rgba(234,179,8,0.10)" }}>
-            <div className="muted" style={{ fontWeight: 900, fontSize: 12 }}>
-              Pending
-            </div>
-            <div style={{ fontWeight: 1000, fontSize: 22 }}>{teacherSummary.pending}</div>
-          </div>
-          <div style={{ border: "1px solid #e2e8f0", borderRadius: 14, padding: 12, background: "rgba(34,197,94,0.08)" }}>
-            <div className="muted" style={{ fontWeight: 900, fontSize: 12 }}>
-              Completed
-            </div>
-            <div style={{ fontWeight: 1000, fontSize: 22 }}>{teacherSummary.completed}</div>
+          <div>
+            <p className="statLabel">Due Today</p>
+            <p className="statValue">{teacherSummary.dueToday}</p>
           </div>
         </div>
-      ) : null}
+        <div className="statCard">
+          <div className="statIconBox statIconAmber">
+            <IconClock />
+          </div>
+          <div>
+            <p className="statLabel">Pending</p>
+            <p className="statValue">{teacherSummary.pending}</p>
+          </div>
+        </div>
+        <div className="statCard">
+          <div className="statIconBox statIconGreen">
+            <IconCheckCircle />
+          </div>
+          <div>
+            <p className="statLabel">Completed</p>
+            <p className="statValue">{teacherSummary.completed}</p>
+          </div>
+        </div>
+        <div className="statCard">
+          <div className="statIconBox statIconRed">
+            <IconAlertCircle />
+          </div>
+          <div>
+            <p className="statLabel">Overdue</p>
+            <p className="statValue">{teacherSummary.overdue}</p>
+          </div>
+        </div>
+      </div>
 
       <div className="grid2">
         <div>
           {error ? <div style={{ color: "#b91c1c", fontWeight: 800, marginBottom: 10 }}>{error}</div> : null}
           {loading ? <div className="muted">Loading tasks...</div> : null}
-          <KanbanBoard
-            tasks={tasks}
-            onMoveTask={moveTask}
-            onOpenTask={(id) => setDetailTaskId(id)}
-          />
+
+          {!isAdmin && viewMode === "board" ? (
+            <div className="boardStack">
+              <div className="boardSection">
+                <p className="sectionLabel">Assigned to Me</p>
+                <KanbanBoard
+                  tasks={assignedTasks}
+                  onMoveTask={moveTask}
+                  onOpenTask={(id) => setDetailTaskId(id)}
+                />
+              </div>
+              <div className="boardSection">
+                <p className="sectionLabel">Tasks I Created</p>
+                <KanbanBoard
+                  tasks={createdTasks}
+                  onMoveTask={moveTask}
+                  onOpenTask={(id) => setDetailTaskId(id)}
+                />
+              </div>
+            </div>
+          ) : (
+            <KanbanBoard tasks={boardTasks} onMoveTask={moveTask} onOpenTask={(id) => setDetailTaskId(id)} />
+          )}
         </div>
 
         <div>
-          {isAdmin ? <AdminStatsPanel department={undefined} /> : null}
+          {isAdmin ? (
+            <AdminStatsPanel
+              department={undefined}
+              createdFrom={createdFrom}
+              createdTo={createdTo}
+              onDateRangeChange={(from, to) => {
+                setCreatedFrom(from);
+                setCreatedTo(to);
+              }}
+            />
+          ) : null}
           <div style={{ height: 10 }} />
-          <NotificationsPanel />
+          <NotificationsPanel summary={sidebarSummary} />
         </div>
       </div>
 
@@ -189,9 +253,9 @@ export default function DashboardPage({ profile }: { profile: UserProfile }) {
           await api.createTask(token, payload);
           await refreshTasks();
         }}
-        isAdmin={isAdmin}
-        users={users}
+        users={users.length ? users : [{ uid: profile.uid, name: profile.name, email: profile.email, department: profile.department, role: profile.role, active: true }]}
         defaultAssignedTo={profile.uid}
+        defaultDepartment={profile.department}
       />
 
       <TaskDetailModal
@@ -200,9 +264,8 @@ export default function DashboardPage({ profile }: { profile: UserProfile }) {
         onClose={() => setDetailTaskId(null)}
         onTaskUpdated={refreshTasks}
         isAdmin={isAdmin}
-        users={users}
+        users={users.length ? users : [{ uid: profile.uid, name: profile.name, email: profile.email, department: profile.department, role: profile.role, active: true }]}
       />
     </div>
   );
 }
-

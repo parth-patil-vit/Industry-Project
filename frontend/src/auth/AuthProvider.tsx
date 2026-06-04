@@ -9,7 +9,8 @@ import {
   signOut,
   sendEmailVerification,
 } from "firebase/auth";
-import { auth } from "../firebase";
+import { auth, firebaseConfigured } from "../firebase";
+import { sleep } from "../utils/authErrors";
 
 type AuthContextValue = {
   firebaseUser: User | null;
@@ -30,6 +31,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!firebaseConfigured || !auth) {
+      setLoading(false);
+      return;
+    }
     return onAuthStateChanged(auth, async (user) => {
       setFirebaseUser(user);
       if (user) {
@@ -48,6 +53,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       idToken,
       loading,
       signUp: async (email, password) => {
+        if (!auth) throw new Error("Firebase is not configured.");
         const cred = await createUserWithEmailAndPassword(auth, email, password);
         if (cred.user) {
           await sendEmailVerification(cred.user);
@@ -56,6 +62,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         await signOut(auth);
       },
       signIn: async (email, password) => {
+        if (!auth) throw new Error("Firebase is not configured.");
         await signInWithEmailAndPassword(auth, email, password);
         const u = auth.currentUser;
         if (u) {
@@ -67,12 +74,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       },
       signInWithGoogle: async () => {
+        if (!auth) throw new Error("Firebase is not configured.");
         const provider = new GoogleAuthProvider();
-        // Allow all Google accounts for the demo; role/department is handled in Firestore.
         await signInWithPopup(auth, provider);
         const u = auth.currentUser;
         if (u) {
           await u.reload();
+          const domainsRaw = (import.meta.env.VITE_ALLOWED_EMAIL_DOMAINS as string) || "";
+          const domains = domainsRaw
+            .split(",")
+            .map((d) => d.trim().toLowerCase())
+            .filter(Boolean);
+          if (domains.length && u.email) {
+            const domain = u.email.split("@")[1]?.toLowerCase();
+            if (!domain || !domains.includes(domain)) {
+              await signOut(auth);
+              throw new Error(`Only school email domains are allowed (${domains.join(", ")}).`);
+            }
+          }
           if (!u.emailVerified) {
             await signOut(auth);
             throw new Error("Please verify your email before logging in.");
@@ -80,10 +99,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       },
       logout: async () => {
+        if (!auth) throw new Error("Firebase is not configured.");
         await signOut(auth);
       },
       getFreshToken: async () => {
-        if (!auth.currentUser) throw new Error("Not authenticated");
+        if (!auth?.currentUser) throw new Error("Not authenticated");
+        await sleep(200);
         return auth.currentUser.getIdToken(true);
       },
     }),

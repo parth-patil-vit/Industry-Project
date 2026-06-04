@@ -1,4 +1,13 @@
-import type { UserProfile, Task, NotificationItem, TaskComment, TaskHistoryItem } from "../types";
+import type {
+  UserProfile,
+  Task,
+  NotificationItem,
+  TaskComment,
+  TaskHistoryItem,
+  StaffUser,
+  AdminStats,
+  ActivityLogItem,
+} from "../types";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string) || "http://localhost:5000";
 
@@ -38,67 +47,112 @@ export async function apiFetch<T>(
 }
 
 export const api = {
-  // Profile
   async getMe(idToken: string) {
     return apiFetch<UserProfile>("/api/me", { idToken });
   },
 
   async listUsers(idToken: string) {
-    return apiFetch<{ users: Array<{ uid: string; name: string; email: string; department: string; role: string }> }>("/api/users", {
+    return apiFetch<{ users: StaffUser[] }>("/api/users", { idToken });
+  },
+
+  async listAdminUsers(idToken: string) {
+    return apiFetch<{ users: StaffUser[] }>("/api/admin/users", { idToken });
+  },
+
+  async createAdminUser(
+    idToken: string,
+    body: { email: string; name: string; role: string; department: string }
+  ) {
+    return apiFetch<{ user: StaffUser }>("/api/admin/users", { method: "POST", idToken, body });
+  },
+
+  async updateAdminUser(
+    idToken: string,
+    userId: string,
+    body: Partial<{ email: string; name: string; role: string; department: string; active: boolean }>
+  ) {
+    return apiFetch<{ user: StaffUser }>("/api/admin/users/" + encodeURIComponent(userId), {
+      method: "PUT",
       idToken,
+      body,
     });
   },
 
-  // Tasks
-  async listTasks(idToken: string, status?: string, department?: string) {
-    return apiFetch<{ tasks: Task[] }>("/api/tasks", { idToken, params: { status, department } });
+  async listTasks(
+    idToken: string,
+    opts?: { status?: string; department?: string; scope?: string; created_from?: string; created_to?: string }
+  ) {
+    return apiFetch<{ tasks: Task[] }>("/api/tasks", { idToken, params: opts });
   },
 
-  async createTask(idToken: string, task: {
-    title: string;
-    description: string;
-    assigned_to: string;
-    department: string;
-    priority: string;
-    due_date: string;
-    status: string;
-  }) {
+  async createTask(
+    idToken: string,
+    task: {
+      title: string;
+      description: string;
+      assigned_to: string;
+      department: string;
+      priority: string;
+      due_date?: string;
+      status: string;
+    }
+  ) {
     return apiFetch<{ task_id: string }>("/api/tasks", { method: "POST", idToken, body: task });
   },
 
-  async updateTask(idToken: string, taskId: string, updates: Partial<{ status: string; assigned_to: string; due_date: string }>) {
+  async updateTask(
+    idToken: string,
+    taskId: string,
+    updates: Partial<{ status: string; assigned_to: string; due_date: string }>
+  ) {
     return apiFetch<{ ok: boolean }>("/api/tasks/" + taskId, { method: "PUT", idToken, body: updates });
   },
 
   async getTaskDetail(idToken: string, taskId: string) {
-    return apiFetch<{ task: Task; comments: TaskComment[]; history: TaskHistoryItem[] }>("/api/tasks/" + taskId, { idToken });
+    return apiFetch<{ task: Task; comments: TaskComment[]; history: TaskHistoryItem[] }>(
+      "/api/tasks/" + taskId,
+      { idToken }
+    );
   },
 
   async addComment(idToken: string, taskId: string, message: string) {
-    return apiFetch<{ ok: boolean }>("/api/tasks/" + taskId + "/comments", { method: "POST", idToken, body: { message } });
+    return apiFetch<{ ok: boolean }>("/api/tasks/" + taskId + "/comments", {
+      method: "POST",
+      idToken,
+      body: { message },
+    });
   },
 
-  // Notifications
   async listNotifications(idToken: string) {
     return apiFetch<{ notifications: NotificationItem[] }>("/api/notifications", { idToken });
   },
 
   async markNotificationRead(idToken: string, notifId: string) {
-    return apiFetch<{ ok: boolean }>("/api/notifications/" + encodeURIComponent(notifId) + "/read", { method: "POST", idToken, body: {} });
+    return apiFetch<{ ok: boolean }>(
+      "/api/notifications/" + encodeURIComponent(notifId) + "/read",
+      { method: "POST", idToken, body: {} }
+    );
   },
 
-  // Admin
-  async getAdminStats(idToken: string, department?: string) {
-    return apiFetch<any>("/api/admin/stats", { idToken, params: { department } });
+  async getAdminStats(
+    idToken: string,
+    opts?: { department?: string; created_from?: string; created_to?: string }
+  ) {
+    return apiFetch<AdminStats>("/api/admin/stats", { idToken, params: opts });
+  },
+
+  async getAdminActivity(idToken: string, limit = 20) {
+    return apiFetch<{ activity: ActivityLogItem[] }>("/api/admin/activity", {
+      idToken,
+      params: { limit },
+    });
   },
 
   async runReminders(idToken: string) {
     return apiFetch<any>("/api/admin/reminders/run", { method: "POST", idToken });
   },
 
-  // Admin / deletion
   async deleteTask(idToken: string, taskId: string) {
     return apiFetch<{ ok: boolean }>("/api/tasks/" + taskId, { method: "DELETE", idToken });
   },
 };
-

@@ -1,13 +1,15 @@
 import React, { useEffect, useState } from "react";
-import type { Priority, TaskStatus } from "../types";
+import type { Priority, TaskStatus, StaffUser } from "../types";
+import { TASK_STATUSES } from "../utils/taskUtils";
+import { formatUserOption } from "../utils/formatUser";
 
 export default function TaskModal({
   open,
   onClose,
   onCreate,
-  isAdmin,
   users,
   defaultAssignedTo,
+  defaultDepartment,
 }: {
   open: boolean;
   onClose: () => void;
@@ -17,40 +19,35 @@ export default function TaskModal({
     assigned_to: string;
     department: string;
     priority: Priority;
-    due_date: string; // YYYY-MM-DD
+    due_date?: string;
     status: TaskStatus;
   }) => Promise<void> | void;
-  isAdmin: boolean;
-  users: Array<{ uid: string; name: string; department: string }> | null;
+  users: StaffUser[];
   defaultAssignedTo: string;
+  defaultDepartment: string;
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [assignedTo, setAssignedTo] = useState(defaultAssignedTo);
-  const [department, setDepartment] = useState("General");
+  const [department, setDepartment] = useState(defaultDepartment);
   const [priority, setPriority] = useState<Priority>("Medium");
   const [dueDate, setDueDate] = useState<string>("");
-  const [status, setStatus] = useState<TaskStatus>("To Do");
+  const [status, setStatus] = useState<TaskStatus>("Open");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
-  function isTokenSkewError(err: any) {
-    const msg = String(err?.message || err || "");
-    return msg.toLowerCase().includes("token used too early");
-  }
 
   useEffect(() => {
     if (!open) return;
     setTitle("");
     setDescription("");
     setAssignedTo(defaultAssignedTo);
-    setDepartment("General");
+    setDepartment(defaultDepartment);
     setPriority("Medium");
     setDueDate("");
-    setStatus("To Do");
+    setStatus("Open");
     setError(null);
     setBusy(false);
-  }, [open, defaultAssignedTo]);
+  }, [open, defaultAssignedTo, defaultDepartment]);
 
   if (!open) return null;
 
@@ -66,9 +63,7 @@ export default function TaskModal({
           </button>
         </div>
 
-        {error ? (
-          <div style={{ marginBottom: 10, color: "#b91c1c", fontWeight: 700 }}>{error}</div>
-        ) : null}
+        {error ? <div style={{ marginBottom: 10, color: "#b91c1c", fontWeight: 700 }}>{error}</div> : null}
 
         <div className="fieldRow">
           <div>
@@ -76,7 +71,7 @@ export default function TaskModal({
             <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Annual Day Schedule" />
           </div>
           <div>
-            <div className="label">Due Date</div>
+            <div className="label">Due Date (optional)</div>
             <input className="input" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
           </div>
         </div>
@@ -89,17 +84,13 @@ export default function TaskModal({
         <div className="fieldRow" style={{ marginTop: 12 }}>
           <div>
             <div className="label">Assigned To</div>
-            {isAdmin ? (
-              <select className="select" value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)}>
-                {(users || []).map((u) => (
-                  <option key={u.uid} value={u.uid}>
-                    {u.name} ({u.department})
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input className="input" value={defaultAssignedTo} disabled />
-            )}
+            <select className="select" value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)}>
+              {users.map((u) => (
+                <option key={u.uid} value={u.uid}>
+                  {formatUserOption(u)}
+                </option>
+              ))}
+            </select>
           </div>
           <div>
             <div className="label">Department</div>
@@ -119,10 +110,11 @@ export default function TaskModal({
           <div>
             <div className="label">Initial Status</div>
             <select className="select" value={status} onChange={(e) => setStatus(e.target.value as TaskStatus)}>
-              <option value="To Do">To Do</option>
-              <option value="In Progress">In Progress</option>
-              <option value="Review">Review</option>
-              <option value="Completed">Completed</option>
+              {TASK_STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
             </select>
           </div>
         </div>
@@ -144,16 +136,12 @@ export default function TaskModal({
                   assigned_to: assignedTo,
                   department: department.trim() || "General",
                   priority,
-                  due_date: dueDate,
+                  ...(dueDate ? { due_date: dueDate } : {}),
                   status,
                 });
                 onClose();
               } catch (e: any) {
-                if (!isTokenSkewError(e)) {
-                  setError(e?.message || "Failed to create task");
-                } else {
-                  setError(null);
-                }
+                setError(e?.message || "Failed to create task");
               } finally {
                 setBusy(false);
               }
@@ -166,4 +154,3 @@ export default function TaskModal({
     </div>
   );
 }
-

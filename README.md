@@ -24,7 +24,11 @@ The backend automatically bootstraps `users/{uid}` for new sign-ins with default
 - `role: Teacher`
 - `department: General`
 
-Admins should set real roles/departments in the `users` collection.
+Admins can manage employees in the app (**Employees** page): pre-register email/name/role/department, edit, and deactivate accounts.
+
+Optional env vars:
+- Backend `ALLOWED_EMAIL_DOMAINS` (e.g. `bms.edu`) — blocks new sign-ups outside listed domains
+- Frontend `VITE_ALLOWED_EMAIL_DOMAINS` — client-side Google sign-in domain check
 
 ## Backend (Flask)
 1. Install dependencies:

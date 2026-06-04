@@ -1,13 +1,27 @@
-import { initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
+import { FirebaseApp, initializeApp } from "firebase/app";
+import { Auth, getAuth } from "firebase/auth";
 
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY as string,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN as string,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID as string,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID as string,
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY as string | undefined,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN as string | undefined,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID as string | undefined,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID as string | undefined,
 };
 
-export const app = initializeApp(firebaseConfig);
-export const auth = getAuth(app);
+function isConfigured(): boolean {
+  return Object.values(firebaseConfig).every(
+    (value) => typeof value === "string" && value.trim().length > 0
+  );
+}
 
+export const firebaseConfigured = isConfigured();
+
+let app: FirebaseApp | null = null;
+let auth: Auth | null = null;
+
+if (firebaseConfigured) {
+  app = initializeApp(firebaseConfig as Required<typeof firebaseConfig>);
+  auth = getAuth(app);
+}
+
+export { app, auth };

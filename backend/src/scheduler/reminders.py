@@ -54,7 +54,9 @@ def run_daily_reminders(db: Any = None) -> int:
         task = task_snap.to_dict() or {}
         if task.get("is_system"):
             continue
-        status = task.get("status") or "To Do"
+        status = task.get("status") or "Open"
+        if status == "To Do":
+            status = "Open"
         if status == STATUS_COMPLETED:
             continue
 

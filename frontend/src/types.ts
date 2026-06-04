@@ -1,5 +1,5 @@
 export type Priority = "Low" | "Medium" | "High";
-export type TaskStatus = "To Do" | "In Progress" | "Review" | "Completed";
+export type TaskStatus = "Open" | "In Progress" | "On Hold" | "Review" | "Completed";
 
 export type UserProfile = {
   uid: string;
@@ -7,6 +7,18 @@ export type UserProfile = {
   name: string;
   role: "Admin" | "Teacher" | "Staff" | string;
   department: string;
+  active?: boolean;
+};
+
+export type StaffUser = {
+  uid: string;
+  name: string;
+  display_name?: string;
+  email: string;
+  department: string;
+  role: string;
+  active: boolean;
+  pending_signup?: boolean;
 };
 
 export type Task = {
@@ -20,6 +32,8 @@ export type Task = {
   due_date: string | null;
   status: TaskStatus | string;
   updated_at: string | null;
+  created_at?: string | null;
+  overdue?: boolean;
 };
 
 export type TaskComment = {
@@ -34,6 +48,7 @@ export type TaskHistoryItem = {
   id: string;
   action: string;
   actor_uid: string;
+  actor_name?: string;
   at: string | null;
   extra?: any;
 };
@@ -47,3 +62,30 @@ export type NotificationItem = {
   read_at: string | null;
 };
 
+export type ActivityLogItem = {
+  id: string;
+  task_id: string;
+  task_title: string;
+  action: string;
+  actor_uid: string;
+  actor_name: string;
+  at: string | null;
+  extra?: any;
+};
+
+export type AdminStats = {
+  tasks_count: number;
+  due_today: number;
+  pending: number;
+  completed: number;
+  overdue: number;
+  open: number;
+  in_progress: number;
+  on_hold: number;
+  review: number;
+  on_hold_review: number;
+  users_total: number;
+  users_active: number;
+  department_breakdown?: Record<string, number>;
+  top_staff_productivity?: Array<{ uid: string; completed_tasks: number }>;
+};

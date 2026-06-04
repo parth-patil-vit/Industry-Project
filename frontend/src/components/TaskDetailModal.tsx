@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
-import type { Task, TaskComment, TaskHistoryItem, TaskStatus } from "../types";
+import type { Task, TaskComment, TaskHistoryItem, TaskStatus, StaffUser } from "../types";
 import { api } from "../api/api";
 import { useAuth } from "../auth/AuthProvider";
+import { TASK_STATUSES, isTaskOverdue } from "../utils/taskUtils";
+import { formatUserOption } from "../utils/formatUser";
 
 export default function TaskDetailModal({
   open,
@@ -16,7 +18,7 @@ export default function TaskDetailModal({
   onClose: () => void;
   onTaskUpdated: () => Promise<void> | void;
   isAdmin: boolean;
-  users: Array<{ uid: string; name: string; department: string }> | null;
+  users: StaffUser[];
 }) {
   const { getFreshToken } = useAuth();
   const [task, setTask] = useState<Task | null>(null);
@@ -24,10 +26,12 @@ export default function TaskDetailModal({
   const [history, setHistory] = useState<TaskHistoryItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(true);
 
   const [newMessage, setNewMessage] = useState("");
   const [busyComment, setBusyComment] = useState(false);
   const [busyDelete, setBusyDelete] = useState(false);
+  const [busyClose, setBusyClose] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -44,9 +48,7 @@ export default function TaskDetailModal({
         setComments(res.comments);
         setHistory(res.history);
       } catch (e: any) {
-        const msg = String(e?.message || e || "");
-        const isTokenSkew = msg.toLowerCase().includes("token used too early");
-        if (!cancelled) setError(isTokenSkew ? null : e?.message || "Failed to load task");
+        if (!cancelled) setError(e?.message || "Failed to load task");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -66,6 +68,7 @@ export default function TaskDetailModal({
       setError(null);
       setDeleteError(null);
       setBusyDelete(false);
+      setBusyClose(false);
     }
   }, [open]);
 
@@ -78,7 +81,7 @@ export default function TaskDetailModal({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, onClose]);
 
-  const statusOptions: TaskStatus[] = useMemo(() => ["To Do", "In Progress", "Review", "Completed"], []);
+  const statusOptions: TaskStatus[] = useMemo(() => [...TASK_STATUSES], []);
 
   async function reloadTask() {
     if (!task) return;
@@ -115,13 +118,14 @@ export default function TaskDetailModal({
 
   if (!open || !taskId) return null;
 
+  const overdue = task ? isTaskOverdue(task) : false;
+
   return (
     <div
       className="modalOverlay"
       role="dialog"
       aria-modal="true"
       onMouseDown={(e) => {
-        // Click outside closes the modal.
         if (e.target === e.currentTarget) onClose();
       }}
     >
@@ -132,19 +136,33 @@ export default function TaskDetailModal({
               Task Detail
             </div>
             <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-              Press `Esc` or click outside to close.
+              Press Esc or click outside to close.
             </div>
           </div>
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            {task && String(task.status) !== "Completed" ? (
+              <button
+                className="btn btnPrimary"
+                disabled={busyClose}
+                onClick={async () => {
+                  setBusyClose(true);
+                  try {
+                    await updateStatus("Completed");
+                  } finally {
+                    setBusyClose(false);
+                  }
+                }}
+              >
+                {busyClose ? "Closing..." : "Close Task"}
+              </button>
+            ) : null}
             {isAdmin ? (
               <button
                 className="btn btnDanger"
                 disabled={busyDelete || !task}
                 onClick={async () => {
                   if (!task) return;
-                  const ok = window.confirm("Delete this task? This cannot be undone.");
-                  if (!ok) return;
-
+                  if (!window.confirm("Delete this task? This cannot be undone.")) return;
                   setBusyDelete(true);
                   setDeleteError(null);
                   try {
@@ -153,8 +171,7 @@ export default function TaskDetailModal({
                     await onTaskUpdated();
                     onClose();
                   } catch (e: any) {
-                    const msg = e?.message || "Failed to delete task";
-                    setDeleteError(msg);
+                    setDeleteError(e?.message || "Failed to delete task");
                   } finally {
                     setBusyDelete(false);
                   }
@@ -164,7 +181,7 @@ export default function TaskDetailModal({
               </button>
             ) : null}
             <button className="btn" onClick={onClose}>
-              Back to board
+              Back
             </button>
           </div>
         </div>
@@ -175,15 +192,16 @@ export default function TaskDetailModal({
 
         {task ? (
           <>
-            <div className="fieldRow" style={{ marginBottom: 12 }}>
-              <div>
-                <div className="label">Title</div>
-                <div style={{ fontWeight: 900 }}>{task.title}</div>
-              </div>
-              <div>
-                <div className="label">Due</div>
-                <div style={{ fontWeight: 800 }}>
-                  {task.due_date ? task.due_date.slice(0, 10) : "—"}
+            <div className={"detailHeader" + (overdue ? " detailHeaderOverdue" : "")}>
+              <div className="fieldRow" style={{ marginBottom: 0 }}>
+                <div>
+                  <div className="label">Title</div>
+                  <div style={{ fontWeight: 900 }}>{task.title}</div>
+                </div>
+                <div>
+                  <div className="label">Due</div>
+                  <div style={{ fontWeight: 800 }}>{task.due_date ? task.due_date.slice(0, 10) : "—"}</div>
+                  {overdue ? <div className="overdueTag">Overdue</div> : null}
                 </div>
               </div>
             </div>
@@ -200,7 +218,6 @@ export default function TaskDetailModal({
                   className="select"
                   value={String(task.status)}
                   onChange={(e) => updateStatus(e.target.value as TaskStatus)}
-                  disabled={false}
                 >
                   {statusOptions.map((s) => (
                     <option key={s} value={s}>
@@ -215,33 +232,31 @@ export default function TaskDetailModal({
               </div>
             </div>
 
-            {isAdmin ? (
-              <div className="fieldRow" style={{ marginBottom: 10 }}>
-                <div>
-                  <div className="label">Reassign To</div>
-                  <select
-                    className="select"
-                    value={String(task.assigned_to || "")}
-                    onChange={(e) => updateAssignment(e.target.value)}
-                  >
-                    {(users || []).map((u) => (
-                      <option key={u.uid} value={u.uid}>
-                        {u.name} ({u.department})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <div className="label">Update Due Date</div>
-                  <input
-                    className="input"
-                    type="date"
-                    value={task.due_date ? task.due_date.slice(0, 10) : ""}
-                    onChange={(e) => updateDueDate(e.target.value)}
-                  />
-                </div>
+            <div className="fieldRow" style={{ marginBottom: 10 }}>
+              <div>
+                <div className="label">Reassign To</div>
+                <select
+                  className="select"
+                  value={String(task.assigned_to || "")}
+                  onChange={(e) => updateAssignment(e.target.value)}
+                >
+                  {users.map((u) => (
+                    <option key={u.uid} value={u.uid}>
+                      {formatUserOption(u)}
+                    </option>
+                  ))}
+                </select>
               </div>
-            ) : null}
+              <div>
+                <div className="label">Update Due Date</div>
+                <input
+                  className="input"
+                  type="date"
+                  value={task.due_date ? task.due_date.slice(0, 10) : ""}
+                  onChange={(e) => updateDueDate(e.target.value)}
+                />
+              </div>
+            </div>
 
             <div className="sectionTitle">Comments</div>
             <div className="commentBox">
@@ -268,10 +283,7 @@ export default function TaskDetailModal({
                         await api.addComment(token, task.id, newMessage.trim());
                         setNewMessage("");
                         await onTaskUpdated();
-                        const res = await api.getTaskDetail(token, task.id);
-                        setTask(res.task);
-                        setComments(res.comments);
-                        setHistory(res.history);
+                        await reloadTask();
                       } finally {
                         setBusyComment(false);
                       }
@@ -283,25 +295,33 @@ export default function TaskDetailModal({
               </div>
             </div>
 
-            <div className="sectionTitle">Activity History</div>
-            <div style={{ maxHeight: 240, overflow: "auto", paddingRight: 4 }}>
-              {history.length === 0 ? <div className="muted">No history yet.</div> : null}
-              {history
-                .slice()
-                .reverse()
-                .map((h) => (
-                  <div key={h.id} className="historyItem">
-                    <div style={{ fontWeight: 900 }}>{h.action}</div>
-                    <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-                      {h.at ? h.at.slice(0, 19).replace("T", " ") : "—"} {h.actor_uid ? `• by ${h.actor_uid}` : ""}
-                    </div>
-                  </div>
-                ))}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div className="sectionTitle" style={{ marginBottom: 0 }}>
+                Activity History
+              </div>
+              <button className="btn" onClick={() => setHistoryOpen((v) => !v)}>
+                {historyOpen ? "Collapse" : "Expand"}
+              </button>
             </div>
+            {historyOpen ? (
+              <div style={{ maxHeight: 240, overflow: "auto", paddingRight: 4 }}>
+                {history.length === 0 ? <div className="muted">No history yet.</div> : null}
+                {history
+                  .slice()
+                  .reverse()
+                  .map((h) => (
+                    <div key={h.id} className="historyItem">
+                      <div style={{ fontWeight: 900 }}>{h.action}</div>
+                      <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                        {h.at ? h.at.slice(0, 19).replace("T", " ") : "—"} • {h.actor_name || h.actor_uid}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            ) : null}
           </>
         ) : null}
       </div>
     </div>
   );
 }
-
